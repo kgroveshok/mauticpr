@@ -1,0 +1,193 @@
+---
+- hosts: all
+
+# This is my extra bits I use to further basic server configs. 
+#  roles: 
+#     - role: common
+#       swapsize: 30
+
+  tasks:
+
+  - name: Epel YUM
+    yum: 
+       name: "{{ item }}"
+       state: latest
+    with_items:
+     - epel-release
+     - wget
+     - git
+     - MySQL-python
+
+
+  - name: Install 5.6 repo
+    command: "{{ item }}"
+    args:
+      chdir: /vagrant
+    ignore_errors: True
+    with_items:
+       - wget http://rpms.famillecollet.com/enterprise/remi-release-7.rpm
+       - sudo rpm -Uvh remi-release-7*.rpm
+       - yum-config-manager --enable remi-php56
+
+  - name: Refresh YUM
+    yum: name="vim" state=latest
+
+  - name: Install AMP
+    yum: 
+     name: "{{ item }}" 
+     state: latest
+    with_items:
+      - httpd
+      - mariadb-server
+      - php
+      - php-mysql
+      - mod_ssl
+      - php-gd 
+      - php-mcrypt
+      - php-xml
+
+  - name: Disable selinux temp (if we are just going to cycle and play)
+    command: setenforce 0
+
+  - name: Disable selinux perm (if we intend to persist the vm)
+    lineinfile:
+        dest: /etc/sysconfig/selinux
+        regexp: "^SELINUX=.*"
+        line: "SELINUX=disabled"
+
+    
+# https://major.io/2007/08/24/apache-no-space-left-on-device-couldnt-create-accept-lock/
+
+  - name: Resolve a known issue with Apache startup
+    blockinfile:
+      dest: /etc/sysctl.conf
+      marker: "# {mark} fix lock issue with apache"
+      block: |
+        kernel.msgmni = 1024
+        kernel.sem = 250 256000 32 1024
+      
+  - name: Poke sysctl
+    command: sysctl -p  
+
+
+# configure basic layout
+
+
+  - name: Create virtual host for mautic testing
+    blockinfile:
+       dest: /etc/httpd/conf/httpd.conf
+       block: |
+          <VirtualHost *:80>
+              ServerName testing
+              ServerAlias testing
+          CustomLog logs/testing.access_log combined
+          DocumentRoot "/var/www/mautic"
+          ErrorDocument 404 http://testing/index.php
+          <Directory />
+              Options FollowSymLinks
+              AllowOverride All
+          </Directory>
+           <files xmlrpc.php>
+                order allow,deny
+                deny from all
+              </files>
+          <Directory "/var/www/mautic">
+             Options -Indexes +FollowSymLinks
+              AllowOverride All
+              Order allow,deny
+              Allow from all
+          </Directory>
+          </VirtualHost>
+
+
+# configure php
+
+  - name: Set PHP error reporting level
+    lineinfile:
+       dest: /etc/php.ini
+       regexp: "^error_reporting.*"
+       line: "error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT"
+
+
+  - name: Set PHP error reporting target
+    lineinfile:
+       dest: /etc/php.ini
+       regexp: "^error_log.*"
+       line: "error_log = syslog"
+
+  - name: Checkout base code
+    git:
+        repo: https://github.com/mautic/mautic.git
+        dest: /var/www/mautic
+    ignore_errors: True
+     
+
+  - name: Skip Composer if already done
+    stat:
+       path: /var/www/mautic/composer.phar
+    register: doneComp
+ 
+
+  - name: Run Composer install
+    command: "{{ item }}"
+    args:
+        chdir: /var/www/mautic
+    with_items:
+      - php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+      - php composer-setup.php
+      -  ./composer.phar update
+      -  ./composer.phar install
+    when: doneComp.stat.exists == False
+
+
+# CHANGEME
+# Uncomment this stub and fill with the PR you want to test
+
+#  - name: Checkout PR
+#    command: "{{ item }}"
+#    args:
+#        chdir: /var/www/mautic
+#    with_items:
+#       - git fetch origin pull/ <<< INSERT PR CODE HERE >>> /head:mauticpr
+#       - git checkout mauticpr -f
+
+
+
+  - name: Set perms on AMP container 
+    file:
+       path: /var/www/mautic
+       owner: apache
+       group: apache
+       mode: "a=rwx"
+       recurse: yes
+
+  - name: Start MariaDB
+    service:
+      name: mariadb
+      state: restarted
+
+  - name: Add user for Mautic
+    mysql_user:
+          name: mautic
+          host: localhost
+          password: "password"
+          priv: 'mautic.*:ALL'
+          state: present
+
+# TODO apply test data
+# Maybe upload some basic config file and test data to saving having to set 
+# everything up each time....
+
+   
+
+
+  - name: Start apache
+    service:
+      name: httpd
+      state: restarted
+
+
+# eof
+
+
+
