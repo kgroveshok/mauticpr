@@ -45,6 +45,8 @@
       - php-gd 
       - php-mcrypt
       - php-xml
+      - php-mbstring
+      - php-bcmath
 
   - name: Disable selinux temp (if we are just going to cycle and play)
     command: setenforce 0
